@@ -1,0 +1,50 @@
+# ===== CMake / Build =====
+build/
+cmake-build-*/
+out/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+
+# ===== Compile artifacts =====
+*.o
+*.obj
+*.elf
+*.hex
+*.bin
+*.map
+*.list
+*.a
+*.d
+*.su
+*.lss
+*.sym
+compile_commands.json
+
+# ===== STM32CubeIDE / Eclipse =====
+.settings/
+.project
+.cproject
+Debug/
+Release/
+*.launch
+*.session.xml
+.metadata/
+
+# ===== STM32CubeMX generated cache =====
+.mxproject
+
+# ===== Editor / OS =====
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+Thumbs.db
+.DS_Store
+Desktop.ini
+
+# ===== Logs =====
+*.log
