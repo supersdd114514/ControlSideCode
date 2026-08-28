@@ -48,13 +48,13 @@ cmake --build --preset Release
 
 1. 读取两路 I2C 摇杆。
 2. 读取 SPDT 开关与按钮状态（需去抖）。
-3. 将上述信息打包，经 UART4 发往 CUAV X7+。
+3. 将上述信息按 CRSF 协议打包，经 UART4 发往 CUAV X7+。
 4. 以 PWM Input 方式捕获 4 路飞控 PWM。
 5. 将 4 路 PWM 经 CAN1 以 UAVCAN/DroneCAN 协议发往另一块 STM32。
 
 ## 通信实现约定
 
-- UART4 帧格式尚未最终确定；实现前先向用户确认协议（裸二进制帧或 MAVLink2）。
+- UART4 使用 CRSF 协议：地址 `0xC8`（flight controller）、类型 `0x16`（RC_CHANNELS_PACKED）、16 通道 11-bit 大端打包、CRC-8/DVB-S2（多项式 `0xD5`，初值 `0x00`）。发送时必须使用完整 22 B Payload，未使用通道填中立值。
 - UAVCAN/DroneCAN 应使用 libcanard，不得自行伪造 CAN 帧绕过协议层。
 - CAN 比特率需与总线一致；当前 CubeMX 为 875 kbit/s，DroneCAN 常用 1 Mbit/s，改动前先确认。
 

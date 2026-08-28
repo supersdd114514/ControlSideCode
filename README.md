@@ -8,7 +8,7 @@
 
 1. 通过两路 I2C 读取两个 I2C 摇杆的模拟/数字量。
 2. 读取 1 个单刀双掷开关（SPDT）与 1 个按钮的 GPIO 状态。
-3. 将摇杆、开关、按钮信息打包，通过 **UART4** 发送给 **CUAV X7+** 飞控。
+3. 将摇杆、开关、按钮信息按 **CRSF 协议** 打包，通过 **UART4** 发送给 **CUAV X7+** 飞控。
 4. 通过定时器 PWM 输入捕获，接收飞控输出的 **4 路 PWM 信号**。
 5. 将 4 路 PWM 数据通过 **CAN1** 总线、以 **UAVCAN（v0，现称 DroneCAN）** 协议发送给另一块 STM32 板。
 
@@ -45,7 +45,7 @@
 - APB2：84 MHz（定时器时钟 168 MHz）
 - LSE：32.768 kHz，供 RTC 使用
 - CAN1：当前 CubeMX 中配置为 875 kbit/s（UAVCAN/DroneCAN 常用 1 Mbit/s，实际部署时需与总线所有节点统一）
-- UART4：参数在 CubeMX 中确认；建议 115200 8N1
+- UART4：CRSF 上行串口，建议 420000 8N1（CRSF 常用波特率），实际需与 CUAV X7+ 对应串口参数一致
 
 ## 目录结构
 
@@ -114,22 +114,62 @@ openocd -f interface/stlink.cfg -f target/stm32f4x.cfg   -c "program build/Debug
 
 ## 通信协议
 
-### UART4 → CUAV X7+
+### UART4 → CUAV X7+（CRSF）
 
-建议的二进制帧（**具体格式需与飞控端固件确认后确定**）：
+UART4 使用 **CRSF**（TBS Crossfire）协议，向 CUAV X7+ 发送 RC 通道数据。
+
+CRSF 帧结构：
 
 | 字段 | 长度 | 说明 |
 | --- | --- | --- |
-| Header | 2 B | 帧头，例如 `0xAA 0x55` |
-| Seq | 1 B | 帧序号 |
-| Joy1 X/Y | 2 × 2 B | 摇杆 1 的 X/Y，int16 |
-| Joy2 X/Y | 2 × 2 B | 摇杆 2 的 X/Y，int16 |
-| Switch | 1 B | 单刀双掷开关状态 |
-| Button | 1 B | 按钮状态 |
-| PWM1–PWM4 | 4 × 2 B | 4 路 PWM 输入值，单位 µs |
-| Checksum | 1–2 B | 校验 |
+| Sync / Address | 1 B | `0xC8` = `CRSF_ADDRESS_FLIGHT_CONTROLLER` |
+| Frame Length | 1 B | 后续字节数 = Type + Payload + CRC，即 `payload_len + 2` |
+| Type | 1 B | `0x16` = `CRSF_FRAMETYPE_RC_CHANNELS_PACKED` |
+| Payload | 22 B | 16 个 RC 通道，每通道 11 bit，按大端位流连续打包 |
+| CRC8 | 1 B | CRC-8/DVB-S2：多项式 `0xD5`，初值 `0x00`，覆盖除 CRC 外的整帧 |
 
-> 若 CUAV X7+ 运行 ArduPilot/PX4，优先考虑直接使用 MAVLink2（如 `RC_CHANNELS_OVERRIDE`）而不是自定义裸帧，以降低飞控端接入成本。
+通道映射建议：
+
+| CRSF 通道 | 数据 | 说明 |
+| --- | --- | --- |
+| CH1 | Joy1 X | 摇杆 1 横轴，11 bit |
+| CH2 | Joy1 Y | 摇杆 1 纵轴，11 bit |
+| CH3 | Joy2 X | 摇杆 2 横轴，11 bit |
+| CH4 | Joy2 Y | 摇杆 2 纵轴，11 bit |
+| CH5 | Switch | 单刀双掷开关，如 `0x000` / `0x7FF` |
+| CH6 | Button | 按钮，如 `0x000` / `0x7FF` |
+| CH7–CH16 | 预留 | 填充中立值，保持标准 22 B Payload |
+
+> CRSF 的 16 通道帧长度为固定值，即使只使用 4–6 个通道，也必须发送完整 22 B Payload，未使用通道填中立值。
+
+CRC8 参考实现：
+
+```c
+uint8_t crsf_crc8(const uint8_t *buf, uint8_t len)
+{
+    uint8_t crc = 0x00;
+    for (uint8_t i = 0; i < len; i++) {
+        crc ^= buf[i];
+        for (uint8_t j = 0; j < 8; j++) {
+            crc = (crc & 0x80) ? (uint8_t)((crc << 1) ^ 0xD5) : (uint8_t)(crc << 1);
+        }
+    }
+    return crc;
+}
+```
+
+组帧示例：
+
+```c
+uint8_t frame[26] = {0};
+frame[0] = 0xC8;   // flight controller
+frame[1] = 24;     // type(1) + payload(22) + crc(1)
+frame[2] = 0x16;   // RC_CHANNELS_PACKED
+// frame[3..24]：写入 16 通道 × 11 bit 打包数据
+frame[25] = crsf_crc8(frame, 25);
+```
+
+> 4 路飞控 PWM 输入数据不通过 UART4/CRSF 发送，仍按下方说明通过 CAN1/UAVCAN 转发。
 
 ### CAN1 → 另一块 STM32（UAVCAN / DroneCAN）
 
@@ -142,7 +182,7 @@ openocd -f interface/stlink.cfg -f target/stm32f4x.cfg   -c "program build/Debug
 
 - [ ] 确定两个 I2C 摇杆模块的地址与寄存器协议，完成初始化与读取函数。
 - [ ] 确定单刀双掷开关的硬件连接（公共端、A4/A5 上拉/下拉）并实现去抖与状态判断。
-- [ ] 确定 UART4 与 CUAV X7+ 的最终帧格式或 MAVLink 消息集。
+- [ ] 确定 UART4 的 CRSF 通道映射与摇杆量程标定（中立值/端点）。
 - [ ] 接入 libcanard，生成并发送 UAVCAN/DroneCAN 消息。
 - [ ] 确认 CAN 总线比特率（875 kbit/s 或 1 Mbit/s）及终端电阻。
 - [ ] 补齐 4 路 PWM 输入的频率/占空比计算与滤波。
