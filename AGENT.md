@@ -56,7 +56,17 @@ cmake --build --preset Release
 
 - UART4 使用 CRSF 协议：地址 `0xC8`（flight controller）、类型 `0x16`（RC_CHANNELS_PACKED）、16 通道 11-bit 大端打包、CRC-8/DVB-S2（多项式 `0xD5`，初值 `0x00`）。发送时必须使用完整 22 B Payload，未使用通道填中立值。
 - UAVCAN/DroneCAN 应使用 libcanard，不得自行伪造 CAN 帧绕过协议层。
-- CAN 比特率需与总线一致；当前 CubeMX 为 875 kbit/s，DroneCAN 常用 1 Mbit/s，改动前先确认。
+- CAN 比特率固定为 1 Mbit/s（当前 `.ioc` 为 Prescaler=3、BS1=10TQ、BS2=3TQ），改动必须同步 `.ioc` 与 `MX_CAN1_Init()`。
+
+## 用户修改接口
+
+- 集中配置：`Core/Inc/app_config.h`（波特率、通道映射、I2C 地址、PWM/CAN 参数）。
+- 用户业务：`Core/Src/app_user.c`，实现或修改：
+  - `Joystick_ReadRawCustom()`：两个摇杆的实际 I2C 读取协议。
+  - `App_MapJoystickToCrsf()`：摇杆原始值到 CRSF 11-bit 通道的映射。
+  - `App_MapSwitchToCrsf()` / `App_MapButtonToCrsf()`：开关/按钮通道值。
+- UAVCAN/DroneCAN：`Core/Src/uavcan.c` 的 `Uavcan_PublishPwm()`、`Uavcan_Update()` 接入 libcanard。
+- CRSF 非阻塞发送：`Core/Src/crsf.c` 的 `CRSF_Transmit()`。
 
 ## 编码风格
 

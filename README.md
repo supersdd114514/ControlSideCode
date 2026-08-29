@@ -44,7 +44,7 @@
 - APB1：42 MHz（定时器时钟 84 MHz）
 - APB2：84 MHz（定时器时钟 168 MHz）
 - LSE：32.768 kHz，供 RTC 使用
-- CAN1：当前 CubeMX 中配置为 875 kbit/s（UAVCAN/DroneCAN 常用 1 Mbit/s，实际部署时需与总线所有节点统一）
+- CAN1：1 Mbit/s（42 MHz / Prescaler 3 = 14 MHz，14 TQ/bit；BS1=10TQ，BS2=3TQ）
 - UART4：CRSF 上行串口，建议 420000 8N1（CRSF 常用波特率），实际需与 CUAV X7+ 对应串口参数一致
 
 ## 目录结构
@@ -60,8 +60,24 @@ ControlSideCode/
 │   ├── gcc-arm-none-eabi.cmake  # ARM GCC 工具链描述
 │   └── stm32cubemx/             # CubeMX 生成的 CMake 片段
 ├── Core/
-│   ├── Inc/                     # 用户头文件
-│   └── Src/                     # main.c 及用户代码
+│   ├── Inc/
+│   │   ├── app_config.h         # 集中配置：波特率、通道映射、I2C 地址、PWM/CAN 参数
+│   │   ├── app_controller.h     # 主循环调度接口
+│   │   ├── app_user.h           # 用户 TODO 业务接口
+│   │   ├── joystick.h           # I2C 摇杆读取接口
+│   │   ├── switch_input.h       # 开关/按钮去抖读取接口
+│   │   ├── pwm_input.h          # 4 路 PWM 输入捕获接口
+│   │   ├── crsf.h               # CRSF 组帧/发送接口
+│   │   └── uavcan.h             # CAN/UAVCAN 发送接口
+│   └── Src/
+│       ├── main.c               # CubeMX 生成，仅在 USER CODE 区调用 App_Init/App_Update
+│       ├── app_controller.c     # 系统调度：定时发送 CRSF/CAN
+│       ├── app_user.c           # TODO：摇杆读取、通道映射等用户业务
+│       ├── joystick.c           # 摇杆模块骨架
+│       ├── switch_input.c       # 开关/按钮去抖实现
+│       ├── pwm_input.c          # PWM 输入捕获实现
+│       ├── crsf.c               # CRSF 组帧与 CRC 实现
+│       └── uavcan.c             # CAN 启动与 UAVCAN 集成接口
 ├── Drivers/                     # STM32 HAL/CMSIS 驱动
 ├── Middlewares/                 # STM32 USB Device 等中间件
 └── USB_DEVICE/                  # USB CDC 应用层
@@ -178,18 +194,32 @@ frame[25] = crsf_crc8(frame, 25);
 - 数据内容：`PWM1–PWM4`，单位 µs 或映射后的 0–1000 命令值。
 - 节点 ID、传输模式（广播/服务）和数据签名需与接收端约定。
 
+## 已实现模块与用户修改接口
+
+| 模块 | 状态 | 修改入口 |
+| --- | --- | --- |
+| CRSF 组帧/CRC/发送 | 已实现 | `Core/Src/crsf.c`；通道映射在 `app_config.h` 与 `app_user.c` |
+| 开关/按钮去抖 | 已实现 | `Core/Src/switch_input.c`；有效电平在 `app_config.h` |
+| 4 路 PWM 输入捕获 | 已实现 | `Core/Src/pwm_input.c`；预分频/有效范围在 `app_config.h` |
+| CAN1 启动（1 Mbit/s） | 已实现 | `Core/Src/uavcan.c` |
+| I2C 摇杆读取 | 待补协议 | 在 `Core/Src/app_user.c` 实现 `Joystick_ReadRawCustom()` |
+| 摇杆/开关/按钮到 CRSF 通道映射 | 已有默认实现 | 在 `Core/Src/app_user.c` 修改三个 `App_Map*()` 函数 |
+| UAVCAN/DroneCAN 发布 | 待接入 libcanard | `Core/Src/uavcan.c` 的 `Uavcan_PublishPwm()` 与 `Uavcan_Update()` |
+
+所有可调参数集中在 `Core/Inc/app_config.h`。
+
 ## 待实现 / TODO
 
-- [ ] 确定两个 I2C 摇杆模块的地址与寄存器协议，完成初始化与读取函数。
-- [ ] 确定单刀双掷开关的硬件连接（公共端、A4/A5 上拉/下拉）并实现去抖与状态判断。
-- [ ] 确定 UART4 的 CRSF 通道映射与摇杆量程标定（中立值/端点）。
-- [ ] 接入 libcanard，生成并发送 UAVCAN/DroneCAN 消息。
-- [ ] 确认 CAN 总线比特率（875 kbit/s 或 1 Mbit/s）及终端电阻。
-- [ ] 补齐 4 路 PWM 输入的频率/占空比计算与滤波。
-- [ ] 增加通信超时、断线检测与 LED/日志指示。
+- [ ] 根据实际摇杆模块实现 `Joystick_ReadRawCustom()`（I2C 地址、寄存器、字节序）。
+- [ ] 按实际摇杆量程和飞控习惯校准 `App_MapJoystickToCrsf()` / `App_MapSwitchToCrsf()` / `App_MapButtonToCrsf()`。
+- [ ] 接入 libcanard，在 `Uavcan_PublishPwm()` 中发送正式 UAVCAN/DroneCAN 消息。
+- [ ] 确认单刀双掷开关公共端接线（当前按公共端接 GND、A4/A5 上拉处理）。
+- [ ] 按需将 CRSF 阻塞发送改为 `HAL_UART_Transmit_IT/DMA`。
+- [ ] 补齐 PWM 输入滤波、通信超时、断线检测与 LED/日志指示。
 
 ## 注意事项
 
 - 修改 CubeMX 配置后，重新生成代码时请在 CubeMX 中保留 `USER CODE BEGIN/END` 区间，避免覆盖手写逻辑。
+- 当前源码树按裸机 `while(1)` 调度；若在 CubeMX 中启用 FreeRTOS 并重新生成代码，请将 `App_Update()` 移入默认任务。
 - CAN 总线两端需接 120 Ω 终端电阻。
 - PWM 输入为飞控信号，注意电平为 3.3 V，必要时做分压/隔离。
