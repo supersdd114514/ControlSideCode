@@ -163,9 +163,11 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE|RCC_OSCILLATORTYPE_LSE;
+  /* HSE：本工程按 8 MHz 晶振配置 PLL（PLLM=8 -> 168 MHz）。
+   * 若板载晶振是 25 MHz，必须把下面 PLLM 改成 25，否则 SYSCLK 会跑到 525 MHz。 */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
-  RCC_OscInitStruct.LSEState = RCC_LSE_ON;
+  RCC_OscInitStruct.LSEState = RCC_LSE_OFF;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
   RCC_OscInitStruct.PLL.PLLM = 8;
@@ -176,6 +178,16 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
+
+  /* LSE 单独配置：本工程没有使用 RTC 功能。
+   * 板上没焊 32.768 kHz 晶振时 HAL_RCC_OscConfig() 会等 5 s 后超时，
+   * 若走 Error_Handler() 整机会静默死机，因此这里失败时直接忽略。
+   * 注意：这段与上面的 HSE 配置都在 CubeMX 生成区内，
+   *       用 CubeMX 重新生成代码后必须重新应用本改动。 */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSE;
+  RCC_OscInitStruct.LSEState = RCC_LSE_ON;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
+  (void)HAL_RCC_OscConfig(&RCC_OscInitStruct);
 
   /** Initializes the CPU, AHB and APB buses clocks
   */
@@ -306,7 +318,13 @@ static void MX_RTC_Init(void)
 {
 
   /* USER CODE BEGIN RTC_Init 0 */
-
+  /* LSE 未起振（板上无 32.768 kHz 晶振）时跳过 RTC 初始化：
+   * HAL_RTC_Init() 会等待 RTC_ISR.INITF，没有 RTC 时钟时会卡到超时。
+   * 本工程不使用 RTC，跳过不影响其他功能。 */
+  if (__HAL_RCC_GET_FLAG(RCC_FLAG_LSERDY) == 0U)
+  {
+    return;
+  }
   /* USER CODE END RTC_Init 0 */
 
   /* USER CODE BEGIN RTC_Init 1 */
@@ -356,11 +374,14 @@ static void MX_SDIO_SD_Init(void)
   hsd.Init.ClockDiv = 0;
   if (HAL_SD_Init(&hsd) != HAL_OK)
   {
-    Error_Handler();
+    /* 本工程不使用 SD 卡：没有插卡时 HAL_SD_Init() 必然失败，
+     * 这里直接返回，绝不能进 Error_Handler()（关中断死循环 = 整机无响应）。
+     * 注意：本段属于 CubeMX 生成区，重新生成代码后必须重新应用本改动。 */
+    return;
   }
   if (HAL_SD_ConfigWideBusOperation(&hsd, SDIO_BUS_WIDE_4B) != HAL_OK)
   {
-    Error_Handler();
+    return;
   }
   /* USER CODE BEGIN SDIO_Init 2 */
 

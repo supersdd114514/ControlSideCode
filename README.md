@@ -6,7 +6,7 @@
 
 本板作为“操控输入 + 飞控通信”的中间节点，主要完成：
 
-1. 通过两路 I2C 读取两个 I2C 摇杆的模拟/数字量。
+1. 通过两路 I2C 读取两个 **M5Stack Unit Joystick2** 摇杆（模块地址 `0x63`，16-bit ADC）。
 2. 读取 1 个单刀双掷开关（SPDT）与 1 个按钮的 GPIO 状态。
 3. 将摇杆、开关、按钮信息按 **CRSF 协议** 打包，通过 **UART4** 发送给 **CUAV X7+** 飞控。
 4. 通过定时器 PWM 输入捕获，接收飞控输出的 **4 路 PWM 信号**。
@@ -16,9 +16,9 @@
 
 | 功能 | 外设/信号 | 引脚 | 说明 |
 | --- | --- | --- | --- |
-| 摇杆 1 I2C | I2C1_SCL | PB6 | 摇杆 1 时钟 |
+| 摇杆 1 I2C | I2C1_SCL | PB6 | M5 Unit Joystick2，地址 `0x63` |
 | 摇杆 1 I2C | I2C1_SDA | PB7 | 摇杆 1 数据 |
-| 摇杆 2 I2C | I2C2_SCL | PF1 | 摇杆 2 时钟 |
+| 摇杆 2 I2C | I2C2_SCL | PF1 | M5 Unit Joystick2，地址 `0x63` |
 | 摇杆 2 I2C | I2C2_SDA | PF0 | 摇杆 2 数据 |
 | 单刀双掷开关 A 端 | GPIO_Input（上拉） | PA4 | CubeMX 标签：`SwitchPin1`，EXTI4 |
 | 单刀双掷开关 B 端 | GPIO_Input（上拉） | PA5 | CubeMX 标签：`SwitchPin2` |
@@ -35,7 +35,8 @@
 | 调试串口 RX | USART1_RX | PA10 | 调试/日志 |
 | USB CDC | USB_OTG_FS_DM/DP | PA11/PA12 | 预留 USB CDC |
 
-> 两路摇杆的 I2C 从机地址、寄存器映射尚未在工程中固定，需根据实际摇杆模块补齐，见“待实现”一节。
+> 两个摇杆模块使用相同的 7-bit 地址 `0x63`，因为它们挂在两条独立的 I2C 总线上。
+> 摇杆驱动的寄存器映射与量程见 `Core/Inc/m5_unit_joystick2.h`。
 
 ## 时钟与总线配置
 
@@ -64,7 +65,8 @@ ControlSideCode/
 │   │   ├── app_config.h         # 集中配置：波特率、通道映射、I2C 地址、PWM/CAN 参数
 │   │   ├── app_controller.h     # 主循环调度接口
 │   │   ├── app_user.h           # 用户 TODO 业务接口
-│   │   ├── joystick.h           # I2C 摇杆读取接口
+│   │   ├── m5_unit_joystick2.h  # M5 Unit Joystick2 I2C 驱动接口（HAL 移植）
+│   │   ├── joystick.h           # 摇杆读取接口
 │   │   ├── switch_input.h       # 开关/按钮去抖读取接口
 │   │   ├── pwm_input.h          # 4 路 PWM 输入捕获接口
 │   │   ├── crsf.h               # CRSF 组帧/发送接口
@@ -72,8 +74,9 @@ ControlSideCode/
 │   └── Src/
 │       ├── main.c               # CubeMX 生成，仅在 USER CODE 区调用 App_Init/App_Update
 │       ├── app_controller.c     # 系统调度：定时发送 CRSF/CAN
-│       ├── app_user.c           # TODO：摇杆读取、通道映射等用户业务
-│       ├── joystick.c           # 摇杆模块骨架
+│       ├── app_user.c           # 摇杆读取（M5 驱动）与通道映射
+│       ├── m5_unit_joystick2.c  # M5 Unit Joystick2 HAL 驱动（I2C 寄存器读写）
+│       ├── joystick.c           # 摇杆模块骨架（weak 兜底实现）
 │       ├── switch_input.c       # 开关/按钮去抖实现
 │       ├── pwm_input.c          # PWM 输入捕获实现
 │       ├── crsf.c               # CRSF 组帧与 CRC 实现
@@ -141,8 +144,19 @@ CRSF 帧结构：
 | Sync / Address | 1 B | `0xC8` = `CRSF_ADDRESS_FLIGHT_CONTROLLER` |
 | Frame Length | 1 B | 后续字节数 = Type + Payload + CRC，即 `payload_len + 2` |
 | Type | 1 B | `0x16` = `CRSF_FRAMETYPE_RC_CHANNELS_PACKED` |
-| Payload | 22 B | 16 个 RC 通道，每通道 11 bit，按大端位流连续打包 |
-| CRC8 | 1 B | CRC-8/DVB-S2：多项式 `0xD5`，初值 `0x00`，覆盖除 CRC 外的整帧 |
+| Payload | 22 B | 16 个 RC 通道，每通道 11 bit，按小端（低位先）位流连续打包 |
+| CRC8 | 1 B | CRC-8/DVB-S2：多项式 `0xD5`，初值 `0x00`，**只覆盖 Type + Payload**（不含 Address 与 Frame Length） |
+
+通道量程（CRSF 规范，ArduPilot/Betaflight 一致）：
+
+| 值 | 飞控换算成的 PWM |
+| --- | --- |
+| `172`（`APP_CRSF_CHANNEL_VALUE_MIN`） | 988 µs |
+| `992`（`APP_CRSF_CHANNEL_VALUE_NEUTRAL`） | 1500 µs |
+| `1811`（`APP_CRSF_CHANNEL_VALUE_MAX`） | 2012 µs |
+
+> 飞控按 `us = (raw - 992) * 5 / 8 + 1500` 换算。用 0..2047 会得到 880..2159 µs 的越界行程，
+> 摇杆/开关位置会失真，因此代码中统一使用 172..1811。
 
 通道映射建议：
 
@@ -152,9 +166,9 @@ CRSF 帧结构：
 | CH2 | Joy1 Y | 摇杆 1 纵轴，11 bit |
 | CH3 | Joy2 X | 摇杆 2 横轴，11 bit |
 | CH4 | Joy2 Y | 摇杆 2 纵轴，11 bit |
-| CH5 | Switch | 单刀双掷开关，如 `0x000` / `0x7FF` |
-| CH6 | Button | 按钮，如 `0x000` / `0x7FF` |
-| CH7–CH16 | 预留 | 填充中立值，保持标准 22 B Payload |
+| CH5 | Switch | 单刀双掷开关：`172` / `1811`，未确定时 `992` |
+| CH6 | Button | 按钮：松开 `172`，按下 `1811` |
+| CH7–CH16 | 预留 | 填充中立值 `992`，保持标准 22 B Payload |
 
 > CRSF 的 16 通道帧长度为固定值，即使只使用 4–6 个通道，也必须发送完整 22 B Payload，未使用通道填中立值。
 
@@ -182,7 +196,7 @@ frame[0] = 0xC8;   // flight controller
 frame[1] = 24;     // type(1) + payload(22) + crc(1)
 frame[2] = 0x16;   // RC_CHANNELS_PACKED
 // frame[3..24]：写入 16 通道 × 11 bit 打包数据
-frame[25] = crsf_crc8(frame, 25);
+frame[25] = crsf_crc8(&frame[2], 23);   // 只覆盖 type + payload，不要从 frame[0] 开始算
 ```
 
 > 4 路飞控 PWM 输入数据不通过 UART4/CRSF 发送，仍按下方说明通过 CAN1/UAVCAN 转发。
@@ -198,28 +212,38 @@ frame[25] = crsf_crc8(frame, 25);
 
 | 模块 | 状态 | 修改入口 |
 | --- | --- | --- |
-| CRSF 组帧/CRC/发送 | 已实现 | `Core/Src/crsf.c`；通道映射在 `app_config.h` 与 `app_user.c` |
+| CRSF 组帧/CRC/发送 | 已实现（CRC 覆盖 Type+Payload） | `Core/Src/crsf.c`；通道映射在 `app_config.h` 与 `app_user.c` |
 | 开关/按钮去抖 | 已实现 | `Core/Src/switch_input.c`；有效电平在 `app_config.h` |
 | 4 路 PWM 输入捕获 | 已实现 | `Core/Src/pwm_input.c`；预分频/有效范围在 `app_config.h` |
 | CAN1 启动（1 Mbit/s） | 已实现 | `Core/Src/uavcan.c` |
-| I2C 摇杆读取 | 待补协议 | 在 `Core/Src/app_user.c` 实现 `Joystick_ReadRawCustom()` |
-| 摇杆/开关/按钮到 CRSF 通道映射 | 已有默认实现 | 在 `Core/Src/app_user.c` 修改三个 `App_Map*()` 函数 |
+| I2C 摇杆读取 | 已实现（M5 Unit Joystick2，支持热插拔重连） | `Core/Src/app_user.c` 的 `Joystick_ReadRawCustom()` + `m5_unit_joystick2.c` |
+| 摇杆 trim 校准 | 使用驱动内置 `X_AXIS_TRIM` / `Y_AXIS_TRIM` | `Core/Inc/m5_unit_joystick2.h`，或直接用模块 0x50 偏移寄存器 |
+| 摇杆/开关/按钮到 CRSF 通道映射 | 已实现（172..1811） | `Core/Src/app_user.c` 的 `App_Map*()` |
 | UAVCAN/DroneCAN 发布 | 待接入 libcanard | `Core/Src/uavcan.c` 的 `Uavcan_PublishPwm()` 与 `Uavcan_Update()` |
 
 所有可调参数集中在 `Core/Inc/app_config.h`。
 
 ## 待实现 / TODO
 
-- [ ] 根据实际摇杆模块实现 `Joystick_ReadRawCustom()`（I2C 地址、寄存器、字节序）。
-- [ ] 按实际摇杆量程和飞控习惯校准 `App_MapJoystickToCrsf()` / `App_MapSwitchToCrsf()` / `App_MapButtonToCrsf()`。
-- [ ] 接入 libcanard，在 `Uavcan_PublishPwm()` 中发送正式 UAVCAN/DroneCAN 消息。
+- [x] 接入 M5Stack Unit Joystick2 驱动（`m5_unit_joystick2.c`），实现 `Joystick_ReadRawCustom()`。
+- [x] 修正 CRSF CRC 覆盖范围与 172..1811 通道量程。
+- [ ] 接入 libcanard，在 `Uavcan_PublishPwm()` 中发送正式 UAVCAN/DroneCAN 消息（含 NodeStatus 心跳、GetNodeInfo、DSDL 生成代码）。
 - [ ] 确认单刀双掷开关公共端接线（当前按公共端接 GND、A4/A5 上拉处理）。
 - [ ] 按需将 CRSF 阻塞发送改为 `HAL_UART_Transmit_IT/DMA`。
 - [ ] 补齐 PWM 输入滤波、通信超时、断线检测与 LED/日志指示。
+- [ ] 若摇杆回中不准，改用模块 0x50/0x52 偏移寄存器或重新标定 `X_AXIS_TRIM` / `Y_AXIS_TRIM`。
 
 ## 注意事项
 
+- **上电不死的两个前提已处理**：
+  - `MX_SDIO_SD_Init()` 在无 SD 卡时不再进入 `Error_Handler()`（原先会关中断死循环，整机无响应）。
+  - LSE（32.768 kHz）改为可选：没有该晶振时只跳过 RTC，不影响主时钟。
+  - 这三处改动位于 CubeMX 生成区（`SystemClock_Config()`、`MX_SDIO_SD_Init()`），**重新生成代码后必须重新应用**。
+- HSE 按 **8 MHz** 配置（`PLLM=8`）。若开发板是 25 MHz 晶振，必须把 `PLLM` 改成 25，否则 PLL 会配到 525 MHz。
+- 摇杆模块缺失不会死机：对应通道保持中立值，并按 1 s 周期重新探测（支持热插拔）。
 - 修改 CubeMX 配置后，重新生成代码时请在 CubeMX 中保留 `USER CODE BEGIN/END` 区间，避免覆盖手写逻辑。
+- `.ioc` 里仍启用着 FreeRTOS，但工程并未编译 FreeRTOS 源码（`main.c` 是裸机 `while(1)`）。在 CubeMX 里重新生成前请先关闭 FreeRTOS，否则 `App_Update()` 的调用点会消失。
 - 当前源码树按裸机 `while(1)` 调度；若在 CubeMX 中启用 FreeRTOS 并重新生成代码，请将 `App_Update()` 移入默认任务。
 - CAN 总线两端需接 120 Ω 终端电阻。
 - PWM 输入为飞控信号，注意电平为 3.3 V，必要时做分压/隔离。
+- I2C 未使用内部上拉（MSP 为 `GPIO_NOPULL`），需模块自带上拉电阻。

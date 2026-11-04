@@ -66,6 +66,10 @@ bool CRSF_SetChannel(uint8_t channel, uint16_t value)
     {
         value = APP_CRSF_CHANNEL_VALUE_MAX;
     }
+    else if (value < APP_CRSF_CHANNEL_VALUE_MIN)
+    {
+        value = APP_CRSF_CHANNEL_VALUE_MIN;
+    }
     s_channels[channel] = value;
     return true;
 }
@@ -78,7 +82,10 @@ bool CRSF_Transmit(void)
 
     CRSF_PackChannels(&s_frame[3]);
 
-    s_frame[CRSF_FRAME_SIZE - 1U] = CRSF_ComputeCrc8(s_frame, CRSF_FRAME_SIZE - 1U);
+    /* CRSF 规范：CRC-8/DVB-S2 只覆盖 Type + Payload，不含 Address 与 Frame Length。
+     * 之前覆盖了整帧（0..24），飞控（ArduPilot/Betaflight）会判 CRC 错并丢弃每一帧。
+     * 23 = type(1) + payload(22)。 */
+    s_frame[CRSF_FRAME_SIZE - 1U] = CRSF_ComputeCrc8(&s_frame[2], (uint8_t)(CRSF_FRAME_SIZE - 3U));
 
     /* TODO：若后续希望非阻塞发送，可改为 HAL_UART_Transmit_IT/DMA，
      * 并补 UART4 中断使能与 IRQHandler。当前使用阻塞发送。 */

@@ -14,8 +14,14 @@ extern "C" {
 #define APP_CRSF_UART_TIMEOUT_MS        10U
 #define APP_CRSF_TX_RATE_HZ             50U      /* CRSF 发送频率 */
 #define APP_CRSF_CHANNEL_COUNT          16U
-#define APP_CRSF_CHANNEL_VALUE_MAX      2047U
-#define APP_CRSF_CHANNEL_VALUE_NEUTRAL  1024U
+
+/* CRSF 11-bit 通道的合法量程。
+ * CRSF 规范（以及 ArduPilot/Betaflight 的解码）是 172..1811，中点 992：
+ *     us = (raw - 992) * 5 / 8 + 1500
+ * 如果按 0..2047 发送，飞控会算出 880..2159 us 的越界行程，摇杆/开关位置失真。 */
+#define APP_CRSF_CHANNEL_VALUE_MIN      172U
+#define APP_CRSF_CHANNEL_VALUE_MAX      1811U
+#define APP_CRSF_CHANNEL_VALUE_NEUTRAL  992U
 
 /* CRSF 通道映射：按实际摇杆/开关定义调整 */
 #define APP_CRSF_CH_JOY1_X              0U
@@ -24,20 +30,26 @@ extern "C" {
 #define APP_CRSF_CH_JOY2_Y              3U
 #define APP_CRSF_CH_SWITCH              4U
 #define APP_CRSF_CH_BUTTON              5U
+/* 若某个轴方向与期望相反（推杆方向反了），
+ * 在 app_user.c 的 Joystick_ReadRawCustom() 里对该轴结果取反即可。 */
 
 /* ========================================================================== */
-/* 2. I2C 摇杆配置（TODO：按实际模块填写）                                     */
+/* 2. I2C 摇杆配置（M5Stack Unit Joystick2）                                  */
 /* ========================================================================== */
-/* 两个摇杆的 7-bit I2C 地址。0 表示“未配置”，此时 Joystick_ReadRawCustom()
- * 返回 false，输出将保持中立值。请根据实际模块修改，或直接实现
- * Joystick_ReadRawCustom() 强符号版本。 */
-#define APP_JOY1_I2C_ADDR               0x00U
-#define APP_JOY2_I2C_ADDR               0x00U
-#define APP_JOY_I2C_TIMEOUT_MS          20U
+/* 两个摇杆分别挂在 I2C1 / I2C2 上，模块固定 7-bit 地址 0x63。
+ * 因为在两条独立总线上，两个模块可以使用相同地址。
+ * 驱动实现见 Core/Src/m5_unit_joystick2.c，读取入口在 app_user.c。 */
+#define APP_JOY1_I2C_ADDR               0x63U
+#define APP_JOY2_I2C_ADDR               0x63U
+/* 单次 I2C 事务超时。必须保持"短"，否则模块掉线时会在 50 Hz 主循环里阻塞。 */
+#define APP_JOY_I2C_TIMEOUT_MS          5U
+/* 模块掉线后的重新探测周期 */
+#define APP_JOY_REPROBE_PERIOD_MS       1000U
 
-/* 摇杆原始值量程，用于 CRSF 线性映射。请按实际传感器量程修改。 */
-#define APP_JOY_RAW_MIN                 0
-#define APP_JOY_RAW_MAX                 4095
+/* 摇杆原始值量程：驱动内部已用各轴 trim 做分段线性映射，
+ * 输出归一到 -32768..32767，中点 0（即"回中 = 0"）。 */
+#define APP_JOY_RAW_MIN                 (-32768)
+#define APP_JOY_RAW_MAX                 32767
 
 /* ========================================================================== */
 /* 3. 单刀双掷开关 / 按钮配置                                                 */

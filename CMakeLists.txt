@@ -37,7 +37,8 @@ message("Build type: " ${CMAKE_BUILD_TYPE})
 enable_language(C CXX ASM)
 
 # Create an executable object type
-add_executable(${CMAKE_PROJECT_NAME})
+add_executable(${CMAKE_PROJECT_NAME}
+    Core/Inc/m5_unit_joystick2.h)
 
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)
@@ -56,6 +57,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/pwm_input.c
     Core/Src/switch_input.c
     Core/Src/uavcan.c
+    Core/Src/m5_unit_joystick2.c
 )
 
 # Add include paths
