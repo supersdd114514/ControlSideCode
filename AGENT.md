@@ -12,7 +12,7 @@
 
 ## 必须遵守
 
-1. 不要直接修改 `Drivers/`、`Middlewares/` 中 ST 提供的库文件。
+1. 不要直接修改 `Drivers/`、`Middlewares/` 中 ST 提供的库文件，也不要修改 `ThirdParty/libcanard/`（DroneCAN 官方源码，原样 vendored，升级请整体替换并记录版本）。
 2. 不要修改 `cmake/stm32cubemx/CMakeLists.txt` 中由 CubeMX 生成的源文件列表；如需新增用户源文件，请在顶层 `CMakeLists.txt` 的 `target_sources` 中添加，并在 `target_include_directories` 中添加对应头文件目录。
 3. 修改 `Core/Src/main.c`、`Core/Src/stm32f4xx_it.c`、`Core/Src/stm32f4xx_hal_msp.c` 时，只允许写在 `/* USER CODE BEGIN ... */` 与 `/* USER CODE END ... */` 之间。
    - **唯一例外（已与用户确认）**：`SystemClock_Config()` 中把 LSE 拆成独立且失败可忽略的调用，以及 `MX_SDIO_SD_Init()` 中把两处 `Error_Handler()` 改成 `return`。这两处是为了避免“无 SD 卡 / 无 32.768 kHz 晶振”时整机死在关中断的 `while(1)` 里。**不要把它们改回 `Error_Handler()`**；用 CubeMX 重新生成代码后必须重新应用。
@@ -33,6 +33,15 @@ cmake --build --preset Release
 ```
 
 构建产物：`build/Debug/ControlSideCode.elf` 或 `build/Release/ControlSideCode.elf`。
+
+协议自测（PC 侧，不接硬件，需 PC 上的 gcc 与 python）：
+
+```bash
+python tests/host/check_msgs.py
+```
+
+该脚本会编译 `dronecan_msgs.c` + libcanard，逐字节比对 DSDL 编码并做一次
+"编码 → 多帧 → 解码" 的传输层回环。改动 `dronecan_msgs.c` 或升级 libcanard 后必须跑一次。
 
 ## 核心外设与引脚
 
@@ -58,7 +67,17 @@ cmake --build --preset Release
 - UART4 使用 CRSF 协议：地址 `0xC8`（flight controller）、类型 `0x16`（RC_CHANNELS_PACKED）、16 通道 11-bit 小端位流打包、CRC-8/DVB-S2（多项式 `0xD5`，初值 `0x00`）。
 - **CRC 只覆盖 Type + Payload（23 字节），不含 Address 与 Frame Length**。覆盖整帧会被 ArduPilot/Betaflight 判为 CRC 错误并整帧丢弃，不要改回 `CRSF_ComputeCrc8(s_frame, 25)`。
 - **通道量程必须是 172..1811，中点 992**（`APP_CRSF_CHANNEL_VALUE_MIN/MAX/NEUTRAL`）。飞控按 `us = (raw - 992) * 5 / 8 + 1500` 换算，用 0..2047 会得到 880..2159 µs 的越界行程。
-- UAVCAN/DroneCAN 应使用 libcanard，不得自行伪造 CAN 帧绕过协议层；完整节点还需要 NodeStatus 心跳与 GetNodeInfo 响应。
+- DroneCAN（UAVCAN v0）使用 `ThirdParty/libcanard` 传输层，不得自行伪造 CAN 帧绕过协议层。
+  消息定义集中在 `Core/Src/dronecan_msgs.c`，节点逻辑在 `Core/Src/uavcan.c`，当前发布/响应：
+  - `uavcan.equipment.esc.RawCommand`（**DTID 1030**，20 ms，优先级 16，载荷 = 5 bit 长度 + 4×int14）
+  - `uavcan.protocol.NodeStatus`（DTID 341，1 Hz 心跳）
+  - `uavcan.protocol.GetNodeInfo`（DTID 1，服务，响应带名称/版本/UID）
+- **DTID 与 DSDL 签名是协议契约**：签名（`DRONECAN_SIGNATURE_*`）用作 libcanard 传输 CRC 的初始值，
+  错一个字节对端就会整帧丢弃。改消息定义必须同步 `dronecan_msgs.h`、接收端和 `README.md` 的表格。
+- DSDL 位序是"每字节 MSB 先 + 多字节字段小端字节序"，务必用 `canardEncodeScalar()`，
+  不要手写移位；改完后运行 `python tests/host/check_msgs.py` 校验。
+- `frame->id` 带 `CANARD_CAN_FRAME_EFF(bit31)` 标志：交给 HAL 前必须 `& CANARD_CAN_EXT_ID_MASK`，
+  反之从 HAL 收到帧后要 `| CANARD_CAN_FRAME_EFF` 再交给 canard。
 - CAN 比特率固定为 1 Mbit/s（当前 `.ioc` 为 Prescaler=3、BS1=10TQ、BS2=3TQ），改动必须同步 `.ioc` 与 `MX_CAN1_Init()`。
 
 ## 用户修改接口
@@ -70,8 +89,11 @@ cmake --build --preset Release
 - 用户业务：`Core/Src/app_user.c`，实现或修改：
   - `App_MapJoystickToCrsf()`：-32768..32767 的摇杆值到 CRSF 172..1811 的映射。
   - `App_MapSwitchToCrsf()` / `App_MapButtonToCrsf`：开关/按钮通道值。
-- UAVCAN/DroneCAN：`Core/Src/uavcan.c` 的 `Uavcan_PublishPwm()`、`Uavcan_Update()` 接入 libcanard。
-- CRSF 非阻塞发送：`Core/Src/crsf.c` 的 `CRSF_Transmit()`。
+- DroneCAN：`Core/Src/uavcan.c`（`Uavcan_Init/Update/PublishPwm/GetStats`）+
+  `Core/Src/dronecan_msgs.c`（DTID、签名、载荷编码）。
+- PWM 有效性：`Core/Src/pwm_input.c` 的 `PWMInput_GetValidMask()`（500..2500 µs 且 100 ms 内有捕获）。
+- 调试输出：`Core/Src/debug_log.c`，通过 `APP_DEBUG_LOG_ENABLE` 整体开关。
+- CRSF 非阻塞发送：`Core/Src/crsf.c` 的 `CRSF_Transmit()`（当前仍为阻塞发送）。
 
 ## 编码风格
 

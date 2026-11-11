@@ -11,7 +11,8 @@ typedef struct
 {
     volatile uint32_t period_ticks;
     volatile uint32_t pulse_ticks;
-    volatile bool     valid;
+    volatile uint32_t last_capture_ms;   /* 最近一次捕获到的时刻，用于断线检测 */
+    volatile bool     valid;             /* 脉宽是否落在有效量程内 */
 } PwmChannel;
 
 static PwmChannel s_pwm[PWM_INPUT_CHANNEL_COUNT] = {0};
@@ -86,8 +87,10 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
     else if (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_2)
     {
         uint32_t pulse = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_2);
-        s_pwm[idx].pulse_ticks = pulse;
-        s_pwm[idx].valid = (pulse >= APP_PWM_MIN_VALID_US) && (pulse <= APP_PWM_MAX_VALID_US);
+
+        s_pwm[idx].pulse_ticks      = pulse;
+        s_pwm[idx].valid            = (pulse >= APP_PWM_MIN_VALID_US) && (pulse <= APP_PWM_MAX_VALID_US);
+        s_pwm[idx].last_capture_ms  = HAL_GetTick();
     }
 }
 
@@ -97,7 +100,30 @@ bool PWMInput_IsValid(uint8_t channel)
     {
         return false;
     }
-    return s_pwm[channel].valid;
+
+    /* 除了脉宽量程，还要判断"最近一次捕获是不是够新"：
+     * 飞控断电或线松之后，pulse_ticks 会一直停在最后一个值上。 */
+    if (!s_pwm[channel].valid)
+    {
+        return false;
+    }
+
+    return ((HAL_GetTick() - s_pwm[channel].last_capture_ms) <= APP_PWM_SIGNAL_TIMEOUT_MS);
+}
+
+uint8_t PWMInput_GetValidMask(void)
+{
+    uint8_t mask = 0U;
+
+    for (uint8_t i = 0U; i < PWM_INPUT_CHANNEL_COUNT; i++)
+    {
+        if (PWMInput_IsValid(i))
+        {
+            mask |= (uint8_t)(1U << i);
+        }
+    }
+
+    return mask;
 }
 
 uint32_t PWMInput_GetPeriodUs(uint8_t channel)

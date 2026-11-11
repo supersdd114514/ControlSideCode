@@ -236,7 +236,15 @@ static void MX_CAN1_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN CAN1_Init 2 */
-
+  /* 打开自动离线恢复（ABOM）：台架上只有本节点、没有对端 ACK 时，
+   * 控制器会反复进入 bus-off，ABOM 能让它自动恢复而不是永久停机。
+   * 保持 AutoRetransmission = DISABLE，避免无 ACK 时 TX 邮箱被同一帧长期占用。
+   * 这两个 Init 参数只有重新初始化才生效，所以这里再调一次 HAL_CAN_Init()。 */
+  hcan1.Init.AutoBusOff = ENABLE;
+  if (HAL_CAN_Init(&hcan1) != HAL_OK)
+  {
+    Error_Handler();
+  }
   /* USER CODE END CAN1_Init 2 */
 
 }

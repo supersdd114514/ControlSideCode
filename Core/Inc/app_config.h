@@ -71,16 +71,41 @@ extern "C" {
 #define APP_PWM_TIM_PERIOD              0xFFFFU
 #define APP_PWM_MIN_VALID_US            500U
 #define APP_PWM_MAX_VALID_US            2500U
+/* 超过这个时间没有新的捕获就认为该路信号已断（飞控关机/线松） */
+#define APP_PWM_SIGNAL_TIMEOUT_MS       100U
 
 /* ========================================================================== */
 /* 5. CAN / UAVCAN（DroneCAN）配置                                            */
 /* ========================================================================== */
 #define APP_CAN_NOMINAL_BITRATE         1000000U
-#define APP_UAVCAN_NODE_ID              42U     /* TODO：与总线分配一致 */
+/* 节点 ID 必须与总线上其他节点不同（接收板、调试工具等） */
+#define APP_UAVCAN_NODE_ID              42U
+/* RawCommand 发布周期 */
 #define APP_UAVCAN_PUBLISH_PERIOD_MS    20U
-#define APP_UAVCAN_PWM_DATA_TYPE_ID     2000U   /* TODO：改为 DSDL 生成的实际 DataType ID */
-#define APP_UAVCAN_USE_RAW_FALLBACK     0       /* 0=严格 UAVCAN/DroneCAN；1=临时裸 CAN 调试 */
-#define APP_UAVCAN_RAW_FALLBACK_CAN_ID  0x1A000000U /* 仅当 RAW_FALLBACK=1 时使用 */
+/* NodeStatus 心跳周期（DroneCAN 要求 <= 1000 ms） */
+#define APP_UAVCAN_NODE_STATUS_PERIOD_MS 1000U
+/* CAN 接收 FIFO 轮询周期：主循环很快，限流避免无谓地反复读寄存器 */
+#define APP_UAVCAN_RX_POLL_PERIOD_MS    2U
+/* libcanard 内存池：GetNodeInfo 响应最多 9 帧 + RawCommand 2 帧，2 KB 足够 */
+#define APP_UAVCAN_MEM_POOL_BYTES       2048U
+/* 节点名：reversed domain，只允许 a-z 0-9 . - _ */
+#define APP_UAVCAN_NODE_NAME            "com.hpaics.control"
+#define APP_UAVCAN_SW_VERSION_MAJOR     1U
+#define APP_UAVCAN_SW_VERSION_MINOR     0U
+#define APP_UAVCAN_HW_VERSION_MAJOR     1U
+#define APP_UAVCAN_HW_VERSION_MINOR     0U
+/* PWM -> RawCommand(int14) 的线性映射：
+ *   cmd = (pwm_us - CENTER) * 8191 / HALF_SPAN，然后钳位到 [-8192, 8191]
+ * 默认把 500..2500 µs 映射到满量程，1500 µs 正好是 0。
+ * 接收端反算：pwm_us = 1500 + cmd * 1000 / 8191 */
+#define APP_UAVCAN_CMD_CENTER_US        1500
+#define APP_UAVCAN_CMD_HALF_SPAN_US     1000
+
+/* ========================================================================== */
+/* 6. 调试输出（USART1，PA9/PA10，115200 8N1）                                */
+/* ========================================================================== */
+/* 1 = 使能上电横幅 + 1 Hz 状态行；0 = 完全裁剪（不占用任何 UART 时间） */
+#define APP_DEBUG_LOG_ENABLE            1
 
 #ifdef __cplusplus
 }

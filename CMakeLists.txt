@@ -53,16 +53,20 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/app_controller.c
     Core/Src/app_user.c
     Core/Src/crsf.c
+    Core/Src/debug_log.c
+    Core/Src/dronecan_msgs.c
     Core/Src/joystick.c
     Core/Src/pwm_input.c
     Core/Src/switch_input.c
     Core/Src/uavcan.c
     Core/Src/m5_unit_joystick2.c
+    # DroneCAN 传输层（MIT，vendored，见 ThirdParty/libcanard/LICENSE）
+    ThirdParty/libcanard/canard.c
 )
 
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
-    # Add user defined include paths
+    ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/libcanard
 )
 
 # Add project symbols (macros)

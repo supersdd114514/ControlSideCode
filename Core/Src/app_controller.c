@@ -6,6 +6,7 @@
 #include "pwm_input.h"
 #include "crsf.h"
 #include "uavcan.h"
+#include "debug_log.h"
 #include "main.h"
 
 static uint32_t s_last_crsf_tick = 0U;
@@ -40,6 +41,9 @@ void App_Init(void)
 
     s_last_crsf_tick   = HAL_GetTick();
     s_last_uavcan_tick = HAL_GetTick();
+
+    /* 横幅放在外设初始化之后，方便确认 CAN / 摇杆是否握手成功 */
+    DebugLog_Init();
 }
 
 void App_Update(void)
@@ -61,7 +65,12 @@ void App_Update(void)
         s_last_uavcan_tick = now;
 
         uint16_t pwm_us[UAVCAN_PWM_CHANNEL_COUNT] = {0};
+        uint8_t  valid_mask;
+
         PWMInput_GetAllPulseUs(pwm_us);
-        (void)Uavcan_PublishPwm(pwm_us);
+        valid_mask = PWMInput_GetValidMask();
+        (void)Uavcan_PublishPwm(pwm_us, valid_mask);
     }
+
+    DebugLog_Update();
 }

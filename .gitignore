@@ -48,3 +48,8 @@ Desktop.ini
 
 # ===== Logs =====
 *.log
+
+# ===== 本机临时工具/测试产物 =====
+tooling/
+.tooling/
+tests/host/*.exe
